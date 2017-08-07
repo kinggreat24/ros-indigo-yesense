@@ -3,33 +3,45 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
 #include <QCoreApplication>
+#include <signal.h>
 
-
-class YesenseCallback:public QCoreApplication, public yesense::BaseYesense{
+class YesenseApplication:public QCoreApplication, public yesense::BaseYesense{
 public:
-    YesenseCallback(int argc,char** argv);
-    ~YesenseCallback(){}
+    YesenseApplication(int argc,char** argv);
+    ~YesenseApplication(){}
     virtual int onYesnseCallback(const QVector<double>& data);
     virtual int onYesenseErrorCallback(const QSerialPort::SerialPortError error);
+    virtual void onYesenseOpenSuccessCallback(const std::string& port, const int baudrate);
     int exec();
+    void attachObject(yesense::Yesense& yesenseObject);
+protected:
+    static void onRosNodeShutdown(int);
+
 private:
     ros::NodeHandlePtr nh_;
     ros::Publisher pub_imu_;
-    sensor_msgs::Imu imu_data_;
-    int seq_;
+    unsigned int seq_;
+    static yesense::Yesense *yesense_;
 };
 
-YesenseCallback::YesenseCallback(int argc,char** argv)
+yesense::Yesense* YesenseApplication::yesense_ = NULL;
+
+YesenseApplication::YesenseApplication(int argc,char** argv)
     :QCoreApplication(argc, argv)
     ,seq_(0)
 {
     ros::init(argc,argv,"yesense_node",ros::init_options::NoSigintHandler);
     nh_.reset(new ros::NodeHandle());
     pub_imu_ = nh_->advertise<sensor_msgs::Imu>("yesense",1);
+
+
+    //bool result = connect(this,SIGNAL(aboutToQuit()),this,SLOT(onRosNodeShutdown()));
+    signal(SIGINT,&YesenseApplication::onRosNodeShutdown);
 }
 
-int YesenseCallback::onYesnseCallback(const QVector<double>& data)
+int YesenseApplication::onYesnseCallback(const QVector<double>& data)
 {
+    sensor_msgs::Imu imu_data_;
     imu_data_.header.seq = seq_;
     imu_data_.header.stamp = ros::Time::now();
     imu_data_.header.frame_id = "yesense";
@@ -57,29 +69,55 @@ int YesenseCallback::onYesnseCallback(const QVector<double>& data)
     pub_imu_.publish(imu_data_);
 
     seq_ ++;
-    if(seq_ > 65536)
+    if(seq_ >= 4294967295)
            seq_ = 0;
 
 }
-int YesenseCallback::onYesenseErrorCallback(const QSerialPort::SerialPortError error)
+int YesenseApplication::onYesenseErrorCallback(const QSerialPort::SerialPortError error)
 {
     BaseYesense::onYesenseErrorCallback(error);
     return 0;
 }
 
-int YesenseCallback::exec()
+void YesenseApplication::onYesenseOpenSuccessCallback(const std::string& port, const int baudrate)
+{
+	ROS_INFO("open device: %s:%d success",port.c_str(),baudrate);
+}
+
+
+int YesenseApplication::exec()
 {
 	return QCoreApplication::exec();
 }
 
+
+void YesenseApplication::attachObject(yesense::Yesense& yesenseObject)
+{
+	yesense_ = &yesenseObject;
+}
+
+void YesenseApplication::onRosNodeShutdown(int sig)
+{
+	ROS_INFO("close serial");
+	//close serial
+	yesense_->close();
+
+	//close app
+	QCoreApplication::exit();
+}
+
+
+
 int main(int argc,char**argv){
 
-    YesenseCallback yesenseCallback(argc,argv);
+    YesenseApplication yesenseApp(argc,argv);
 
-    yesense::Yesense yesense_("/dev/ttyUSB0",460800,boost::bind(&YesenseCallback::onYesnseCallback,&yesenseCallback,_1));
-    yesense_.setYesenseErrorCallback(boost::bind(&YesenseCallback::onYesenseErrorCallback,&yesenseCallback,_1));
+    yesense::Yesense yesense_("/dev/ttyUSB0",460800,boost::bind(&YesenseApplication::onYesnseCallback,&yesenseApp,_1));
+    yesense_.setYesenseErrorCallback(boost::bind(&YesenseApplication::onYesenseErrorCallback,&yesenseApp,_1));
+    yesense_.setYesenseOpenSuccessCallback(boost::bind(&YesenseApplication::onYesenseOpenSuccessCallback,&yesenseApp,_1,_2));
+    yesenseApp.attachObject(yesense_);
     yesense_.open();
     
-    yesenseCallback.exec();
+    yesenseApp.exec();
     return 0;
 }

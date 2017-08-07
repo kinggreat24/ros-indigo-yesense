@@ -1,6 +1,9 @@
 #include "yesense.h"
 #include <QByteArray>
 #include <iostream>
+#include <QStringList>
+#include <QTextStream>
+#include <QFile>
 
 namespace yesense {
 
@@ -11,6 +14,7 @@ Yesense::Yesense()
     ,m_packLength(127)
     ,m_yesenseCallbak(NULL){
 
+	initParam();
 }
 
  Yesense::Yesense(const std::string port,const int baudrate)
@@ -19,6 +23,7 @@ Yesense::Yesense()
     ,m_yesensePort(port)
     ,m_packLength(127)
     ,m_yesenseCallbak(NULL){
+	initParam();
 
  }
 
@@ -28,6 +33,7 @@ Yesense::Yesense()
      ,m_yesensePort(port)
      ,m_packLength(127)
      ,m_yesenseCallbak(yesenseCallback){
+	initParam();
 
  }
 
@@ -42,6 +48,13 @@ int Yesense::setYesenseErrorCallback(OnYesenseErrorCallback yesenseErrorCallback
 {
     m_yesenseErrorCallback = yesenseErrorCallback;
     return 0;
+}
+
+
+int Yesense::setYesenseOpenSuccessCallback(OnOpenYesenseSuccessCallback yesenseOpenSuccessCallback)
+{
+	m_yesenseOpenSuccessCallback = yesenseOpenSuccessCallback;
+	return 0;
 }
 
  int Yesense::setBaudrate(const int baudrate){
@@ -69,17 +82,22 @@ int Yesense::setYesenseErrorCallback(OnYesenseErrorCallback yesenseErrorCallback
     m_serialPort->setStopBits(QSerialPort::OneStop);
     m_serialPort->setFlowControl(QSerialPort::NoFlowControl);
     m_serialPort->setReadBufferSize(460800);
-
+   
     //if (m_serialPort->open(QIODevice::ReadWrite))
     if (m_serialPort->open(QIODevice::ReadWrite))
     {
         connect(m_serialPort, SIGNAL(readyRead()), this, SLOT(readable()));
-        connect(m_serialPort, SIGNAL(error(QSerialPort::SerialPortError)), this, SLOT(getErrorFromSerial(QSerialPort::SerialPortError)));
-        return true;
+        connect(m_serialPort, SIGNAL(error(QSerialPort::SerialPortError)), this, SLOT(getErrorFromSerial(QSerialPort::SerialPortError))); 
+
+	if(m_yesenseOpenSuccessCallback)
+		m_yesenseOpenSuccessCallback(m_yesensePort,m_badurate);
+   
+	return true;
     }
     else
     {
         QSerialPort::SerialPortError errorInformation = m_serialPort->error();
+	getErrorFromSerial(errorInformation);
         return false;
     }
  }
@@ -111,6 +129,34 @@ int Yesense::setYesenseErrorCallback(OnYesenseErrorCallback yesenseErrorCallback
         m_yesenseErrorCallback(error);
 
  }
+
+
+
+ void Yesense::initParam()
+ {
+    m_isCalib = true;
+    m_isGyro = true;
+    m_isSaveData = true;
+    
+    m_isTimeStamp = true;
+    m_isFileExist = false;
+
+    m_isAcc = true;
+    m_isFreeAcc = true;
+    m_isSpdDif = true;
+    m_isSpd = true;
+    m_isMag = true;
+    m_isEula = true;
+    m_isQuar = true;
+    m_isDirectDif =true;
+
+
+    m_strFilePathName = "/home/liweixin/catkin_ws/src/yesense/yesense_data";
+    m_fileHandler = NULL;
+    m_write = NULL;
+ }
+
+
  void Yesense::serialize(const QByteArray& arr)
  {
      m_Array.append(arr);
@@ -453,7 +499,246 @@ int Yesense::setYesenseErrorCallback(OnYesenseErrorCallback yesenseErrorCallback
          }
      }
      m_Array.remove(0, iRemoveIndex);
+
+    /*******数据保存******/
+    if (m_isSaveData)
+    {
+	exportData(WData);
+	WData.clear();
+    }
+    else
+    {
+	if (m_fileHandler != NULL)
+	{
+		m_fileHandler->close();
+	}
+    }
+
+    /*******校准数据******/
+    /*if (m_isCalib)
+    {
+	for (int i = 0; i < WData.size() / 27; ++i)
+	{
+		MagCalibData.append(WData.at(i * 27 + 13));
+		MagCalibData.append(WData.at(i * 27 + 14));
+		MagCalibData.append(WData.at(i * 27 + 15));
+	}
+    }
+    
+    /*******IMU gyro bias*******/
+    /*if (m_isGyro)
+    {
+	//100是帧率
+	if (m_GyroData.size() > 3 * m_second * 100)
+	{
+		return;
+	}
+	for (int i = 0; i < WData.size() / 27; ++i)
+	{
+		m_GyroData.append(WData.at(i * 27 + 10));
+		m_GyroData.append(WData.at(i * 27 + 11));
+		m_GyroData.append(WData.at(i * 27 + 12));
+	}
+
+    }*/
+
+
  }
 
+
+void Yesense::exportData(const QVector<double>& WData)
+{
+	QStringList attributeStrList;
+	attributeStrList << "TID" << "AccX" << "AccY" << "AccZ" << "FreeAccX" << "FreeAccY" << "FreeAccZ" << "dvX" << "dvY" << "dvZ" << "AngVX" << "AngVY" << "AngVZ" << "MagX" << "MagY" << "MagZ" << "Pitch" << "Roll" << "Yaw" << "q0" << "q1" << "q2" << "q3" << "dq0" << "dq1" << "dq2" << "dq3";
+	QString strSpliter = ", ";
+	if (m_isFileExist == false)
+	{
+
+		m_fileHandler = new QFile(m_strFilePathName);
+
+		if (!m_fileHandler->open(QIODevice::Append | QIODevice::Text))
+			return;
+
+		m_isFileExist = true;
+		m_write = new QTextStream(m_fileHandler);
+		QString strHeader = "Standard output of YIS Manager:";
+		*m_write << strHeader << "\n";
+		for (int i = 0; i < attributeStrList.size(); ++i)
+		{
+			if ((i == 1 || i == 2 || i == 3)&m_isAcc == false)
+			{
+				continue;
+			}
+			if ((i == 4 || i == 5 || i == 6)&m_isFreeAcc == false)
+			{
+				continue;
+			}
+			if ((i == 7 || i == 8 || i == 9)&m_isSpdDif == false)
+			{
+				continue;
+			}
+			if ((i == 10 || i == 11 || i == 12)&m_isSpd == false)
+			{
+				continue;
+			}
+			if ((i == 13 || i == 14 || i == 15)&m_isMag == false)
+			{
+				continue;
+			}
+			if ((i == 16 || i == 17 || i == 18)&m_isEula == false)
+			{
+				continue;
+			}
+			if ((i == 19 || i == 20 || i == 21 || i == 22)&m_isQuar == false)
+			{
+				continue;
+			}
+			if ((i == 23 || i == 24 || i == 25 || i == 26)&m_isDirectDif == false)
+			{
+				continue;
+			}
+			if (i == 0)
+			{
+				QString temp = QString("%1").arg(attributeStrList.at(i), 5, QChar(' '));
+				*m_write << temp << strSpliter;
+			}
+			else if (i == attributeStrList.size() - 1)
+			{
+				QString temp = QString("%1").arg(attributeStrList.at(i), 8, QChar(' '));
+				*m_write << temp;
+			}
+			else
+			{
+				QString temp = QString("%1").arg(attributeStrList.at(i), 8, QChar(' '));
+				*m_write << temp << strSpliter;
+			}
+
+		}
+		*m_write << "\n";
+	}
+
+	else
+	{
+		for (int i = 0; i < WData.size() / attributeStrList.size(); ++i)
+		{
+
+			/********时间戳********/
+			if (m_isTimeStamp)
+			{
+
+				QString temp = QString("%1").arg(int(WData.at(i * attributeStrList.size() + 0)), 5, 10, QChar(' '));
+				*m_write << temp << strSpliter;
+			}
+			else
+			{
+				QString temp = QString("%1").arg(0, 5, 10, QChar(' '));
+				*m_write << temp << strSpliter;
+			}
+
+			/******** 加速度********/
+			if (m_isAcc)
+			{
+				for (int j = 1; j < 4; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+
+			/******** 自由加速度********/
+			if (m_isFreeAcc)
+			{
+				for (int j = 4; j < 7; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+			/******** 速度增量********/
+			if (m_isSpdDif)
+			{
+				for (int j = 7; j < 10; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+
+			/******** 角速度********/
+			if (m_isSpd)
+			{
+				for (int j = 10; j < 13; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+
+			/******** 磁场强度********/
+			if (m_isMag)
+			{
+				for (int j = 13; j < 16; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 0);
+					QString temp = QString("%1").arg(str,10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+
+			/******** 欧拉角********/
+			if (m_isEula)
+			{
+				for (int j = 16; j < 19; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+
+			/******** 四元素********/
+			if (m_isQuar)
+			{
+				for (int j = 19; j < 23; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					*m_write << temp << strSpliter;
+				}
+			}
+
+			/******** 方位增量********/
+			if (m_isDirectDif)
+			{
+				for (int j = 23; j < 27; j++)
+				{
+					QString str = QString::number(WData.at(i * attributeStrList.size() + j), 'f', 6);
+					QString temp = QString("%1").arg(str, 10, QChar(' '));
+					if (j == 26)
+					{
+						*m_write << temp;
+					}
+					else
+						*m_write << temp << strSpliter;
+				}
+			}
+
+
+
+			*m_write << "\n";
+		}
+	}
+	//WData.clear();
+}
 
 }

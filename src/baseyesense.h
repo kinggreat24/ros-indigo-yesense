@@ -11,8 +11,10 @@ public:
                 std::cout<<"open port success"<<std::endl;
                 break;
            case QSerialPort::DeviceNotFoundError:
+		std::cout<<"can not find the device, please check"<<std::endl;
                 break;
            case QSerialPort::PermissionError:
+		std::cout<<"another process or a user not having enough permission and credentials to open."<<std::endl;
                 break;
            case QSerialPort::ResourceError:
                 std::cout<<"An I/O error occurred when a resource becomes unavailable"<<std::endl;
@@ -21,6 +23,7 @@ public:
                 break;
         }
     }
+   virtual void onYesenseOpenSuccessCallback(const std::string& port, const int baudrate) = 0;
 };
 }
 #endif // BASEYESENSE_H
