@@ -1,5 +1,5 @@
 # ros-indigo-yesense
-a Imu package for ros-indigo!
+An Imu package for ros-indigo!
 
 (1)代码组织：
 src
